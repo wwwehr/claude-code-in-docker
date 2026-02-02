@@ -1,0 +1,109 @@
+services:
+  claude:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:20-slim
+
+        ENV SHELL=/bin/bash
+
+        # Install base packages and setup repos
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates curl wget jq ripgrep fd-find git openssh-client gnupg neovim \
+            python3 python3-pip python3-venv make unzip \
+            && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+            && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+            && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+            && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian bookworm stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+            && apt-get update && apt-get install -y --no-install-recommends gh docker-ce-cli \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Install AWS CLI
+        RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "awscliv2.zip" \
+            && unzip awscliv2.zip && ./aws/install && rm -rf awscliv2.zip aws
+
+        # Install yq
+        RUN curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(dpkg --print-architecture)" -o /usr/local/bin/yq \
+            && chmod +x /usr/local/bin/yq
+
+        # Create claude user
+        RUN userdel -r node \
+            && groupadd -g 1000 claude \
+            && useradd -m -u 1000 -g 1000 claude \
+            && mkdir -p /home/claude/.claude /home/claude/.cache /home/claude/.ssh /home/claude/.gnupg /home/claude/.local/bin \
+            && chmod 700 /home/claude/.gnupg \
+            && chown -R claude:claude /home/claude
+
+        USER claude
+        WORKDIR /sandbox
+        ENV PATH="/home/claude/.local/bin:/home/claude/.bun/bin:${PATH}"
+
+        # Install uv (Python package manager)
+        RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+        # Install pnpm
+        RUN curl -fsSL https://get.pnpm.io/install.sh | sh -
+
+        # Install bun
+        RUN curl -fsSL https://bun.sh/install | bash
+
+        # Install Claude Code CLI
+        RUN curl -fsSL https://claude.ai/install.sh | bash -s latest
+
+        CMD ["claude"]
+    
+    stdin_open: true
+    tty: true
+    hostname: claude-code
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - $HOME/.claude-code:/home/claude/.claude
+      - $HOME/.claude-code.json:/home/claude/.claude.json
+      - $HOME/.cache/claude-code:/home/claude/.cache
+      - $HOME/.ssh/claude_ed25519:/home/claude/.ssh/id_ed25519:ro
+      - $HOME/.gnupg-claude:/home/claude/.gnupg
+      - $HOME/.config/gh-claude:/home/claude/.config/gh
+    environment:
+      - CLAUDE_CODE_ENABLE_TELEMETRY=0
+      - DO_NOT_TRACK=1
+      - STATSIG_DISABLED=1
+      - LANG=C.UTF-8
+      - TERM=xterm-kitty
+      - PATH=/home/claude/.local/bin:/home/claude/.bun/bin:/home/claude/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - GPG_TTY=/dev/console
+      - EDITOR=nvim
+    configs:
+      - source: gitconfig
+        target: /home/claude/.gitconfig
+        mode: 0644
+      - source: ssh_config
+        target: /home/claude/.ssh/config
+        mode: 0644
+
+configs:
+  gitconfig:
+    content: |
+      [user]
+          email = <YOUR EMAIL ADDRESS>
+          name = <YOUR NAME>
+          signingkey = <YOUR SIGNING KEY>
+      [init]
+          defaultBranch = main
+      [safe]
+          directory = *
+      [commit]
+          gpgsign = true
+      [tag]
+          gpgsign = true 
+      [core]
+          editor = nvim
+  ssh_config:
+    content: |
+      Host github.com
+          IdentityFile ~/.ssh/id_ed25519
+          IdentitiesOnly yes
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
